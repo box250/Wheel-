@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Wheelie Life Web Edition</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #000; }
+        #ui { position: absolute; top: 20px; left: 20px; color: white; pointer-events: none; }
+        .score-box { background: rgba(0,0,0,0.5); padding: 15px; border-radius: 10px; border-left: 5px solid #ffcc00; }
+        #wheelie-meter { font-size: 32px; font-weight: bold; color: #ffcc00; }
+        .hint { font-size: 14px; margin-top: 10px; color: #ccc; }
+        #status { font-size: 20px; color: #ff4444; font-weight: bold; display: none; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <div class="score-box">
+            <div>WHEELIE DISTANCE: <span id="wheelie-meter">0</span> m</div>
+            <div id="status">CRASHED! RESTARTING...</div>
+            <div class="hint">Управление: W (Газ), S (Тормоз), A (Наклон назад), D (Наклон вперед)</div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+
+    <script>
+        // Инициализация сцены и физики
+        const scene = new THREE.Scene();
+        const world = new CANNON.World();
+        world.gravity.set(0, -15, 0); // Чуть сильнее гравитация для веса
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(0x333333);
+        document.body.appendChild(renderer);
+
+        // Свет
+        const ambient = new THREE.AmbientLight(0xffffff, 0.7);
+        scene.add(ambient);
+        const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+        sun.position.set(10, 20, 10);
+        scene.add(sun);
+
+        // Земля (бесконечная дорога)
+        const groundMat = new CANNON.Material();
+        const groundBody = new CANNON.Body({ mass: 0, shape: new CANNON.Plane(), material: groundMat });
+        groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+        world.addBody(groundBody);
+
+        const roadGeo = new THREE.PlaneGeometry(20, 20000);
+        const roadMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
+        const road = new THREE.Mesh(roadGeo, roadMat);
+        road.rotation.x = -Math.PI / 2;
+        scene.add(road);
+
+        // Мотоцикл (Упрощенный корпус)
+        const bikeShape = new CANNON.Box(new CANNON.Vec3(0.6, 0.25, 0.15));
+        const bikeBody = new CANNON.Body({ mass: 40 });
+        bikeBody.addShape(bikeShape);
+        bikeBody.position.set(0, 1, 0);
+        world.addBody(bikeBody);
+
+        const bikeMesh = new THREE.Group();
+        const frame = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 0.3), new THREE.MeshStandardMaterial({color: 0xee1111}));
+        bikeMesh.add(frame);
+        scene.add(bikeMesh);
+
+        // Колеса
+        const wheelRadius = 0.35;
+        const wheelShape = new CANNON.Sphere(wheelRadius);
+        
+        function createWheel(offset) {
+            const body = new CANNON.Body({ mass: 8, shape: wheelShape });
+            body.position.set(offset, 0.5, 0);
+            world.addBody(body);
+            const mesh = new THREE.Mesh(new THREE.SphereGeometry(wheelRadius, 16, 16), new THREE.MeshStandardMaterial({color: 0x111111, wireframe: true}));
+            scene.add(mesh);
+            return { body, mesh, offset };
+        }
+
+        const backWheel = createWheel(-0.7);
+        const frontWheel = createWheel(0.7);
+
+        // Крепления
+        const springBack = new CANNON.DistanceConstraint(bikeBody, backWheel.body, 0.8, new CANNON.Vec3(-0.7, -0.3, 0));
+        const springFront = new CANNON.DistanceConstraint(bikeBody, frontWheel.body, 0.8, new CANNON.Vec3(0.7, -0.3, 0));
+        world.addConstraint(springBack);
+        world.addConstraint(springFront);
+
+        // Управление и логика
+        const keys = {};
+        window.onkeydown = (e) => keys[e.code] = true;
+        window.onkeyup = (e) => keys[e.code] = false;
+
+        let wheelieDistance = 0;
+        const wheelieMeter = document.getElementById('wheelie-meter');
+        const statusTxt = document.getElementById('status');
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
+
+        function update() {
+            world.step(1/60);
+
+            // Физика управления
+            if (keys['KeyW']) backWheel.body.angularVelocity.z = -35; // Газ
+            if (keys['KeyS']) backWheel.body.angularVelocity.z = 5;  // Тормоз
+            
+            if (keys['KeyA']) bikeBody.applyTorque(new CANNON.Vec3(0, 0, 180)); // Баланс назад
+            if (keys['KeyD']) bikeBody.applyTorque(new CANNON.Vec3(0, 0, -180)); // Баланс вперед
+
+            // Обновление графики
+            bikeMesh.position.copy(bikeBody.position);
+            bikeMesh.quaternion.copy(bikeBody.quaternion);
+            backWheel.mesh.position.copy(backWheel.body.position);
+            frontWheel.mesh.position.copy(frontWheel.body.position);
+
+            // Логика WHEELIE
+            // Если переднее колесо выше заднего на определенный порог
+            if (frontWheel.body.position.y > backWheel.body.position.y + 0.3 && Math.abs(bikeBody.angularVelocity.z) < 5) {
+                wheelieDistance += Math.abs(bikeBody.velocity.x) * 0.01;
+                wheelieMeter.innerText = Math.floor(wheelieDistance);
+            }
+
+            // Проверка на падение (угол наклона)
+            const euler = new THREE.Euler().setFromQuaternion(bikeMesh.quaternion);
+            if (Math.abs(euler.z) > 1.8) {
+                statusTxt.style.display = 'block';
+                setTimeout(() => location.reload(), 1500);
+            }
+
+            // Камера
+            camera.position.set(bikeBody.position.x + 2, bikeBody.position.y + 1, 6);
+            camera.lookAt(bikeBody.position.x + 2, bikeBody.position.y, 0);
+
+            renderer.render(scene, camera);
+            requestAnimationFrame(update);
+        }
+
+        update();
+    </script>
+</body>
+</html>
