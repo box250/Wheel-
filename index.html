@@ -22,68 +22,78 @@
 
 <div class="box">
     <h2>Админ-Панель</h2>
-    <button class="btn-blue" onclick="collectFullData()">О моем устройстве</button>
+    <button class="btn-blue" id="save-btn" onclick="collectFullData()">О моем устройстве</button>
     <button class="btn-green" onclick="viewCloudData()">Данные устройств</button>
     <div id="results"></div>
 </div>
 
 <script>
-    // Облачное хранилище (JSON-бин)
-    const BINS_API = "https://api.npoint.io/4f78667c4749f9976f7c";
+    // Твой актуальный URL из скриншота
+    const BINS_API = "https://api.npoint.io/e5de1576f58f9afbfba8";
 
     async function collectFullData() {
-        alert("Сбор полных данных... Подождите секунду.");
+        const btn = document.getElementById('save-btn');
+        btn.innerText = "Сбор данных...";
         
-        let ipData = { ip: "Неизвестен", city: "Неизвестен", org: "Неизвестен" };
+        // 1. Получаем IP и Геопозицию
+        let ipData = { ip: "Неизвестен", city: "Неизвестен", country_name: "Неизвестно", org: "Неизвестен" };
         try {
             const res = await fetch('https://ipapi.co/json/');
-            ipData = await res.json();
-        } catch(e) {}
+            if (res.ok) ipData = await res.json();
+        } catch(e) { console.error("Ошибка IP"); }
 
+        // 2. Получаем данные о батарее
         let batteryInfo = "Нет данных";
         try {
-            const battery = await navigator.getBattery();
-            batteryInfo = `${Math.round(battery.level * 100)}% (${battery.charging ? "Заряжается" : "Разряжается"})`;
+            if (navigator.getBattery) {
+                const battery = await navigator.getBattery();
+                batteryInfo = `${Math.round(battery.level * 100)}% (${battery.charging ? "Зарядка" : "Разрядка"})`;
+            }
         } catch(e) {}
 
+        // 3. Формируем объект со всеми данными
         const fullInfo = {
-            time: new Date().toLocaleString(),
+            time: new Date().toLocaleString("ru-RU"),
             ip: ipData.ip,
             location: `${ipData.city}, ${ipData.country_name}`,
             provider: ipData.org,
             os: navigator.platform,
             cores: navigator.hardwareConcurrency || "Неизвестно",
             ram: navigator.deviceMemory ? `${navigator.deviceMemory} GB` : "Неизвестно",
-            screen: `${window.screen.width}x${window.screen.height} (Scale: ${window.devicePixelRatio})`,
+            screen: `${window.screen.width}x${window.screen.height}`,
             battery: batteryInfo,
-            userAgent: navigator.userAgent,
-            gpu: getGPU()
+            userAgent: navigator.userAgent
         };
 
         try {
+            // Читаем текущий список из облака
             const response = await fetch(BINS_API);
             let currentData = await response.json();
+            
+            // Если там не массив (например, пустой файл), создаем его
             if (!Array.isArray(currentData)) currentData = [];
+            
+            // Добавляем новую запись в массив
             currentData.push(fullInfo);
 
-            await fetch(BINS_API, {
+            // Отправляем обновленный массив обратно в облако
+            const saveResponse = await fetch(BINS_API, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(currentData)
             });
 
-            alert("Все данные (IP, Локация, Железо) сохранены!");
+            if (saveResponse.ok) {
+                alert("Данные успешно сохранены в облако!");
+            } else {
+                alert("Ошибка сервера при сохранении.");
+            }
         } catch (e) {
-            alert("Ошибка сохранения.");
+            console.error(e);
+            alert("Ошибка сохранения. Убедись, что на npoint.io сохранены скобки []");
+        } finally {
+            btn.innerText = "О моем устройстве";
         }
-    }
-
-    function getGPU() {
-        const canvas = document.createElement('canvas');
-        const gl = canvas.getContext('webgl');
-        if (!gl) return "Неизвестно";
-        const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
-        return debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : "Неизвестно";
     }
 
     async function viewCloudData() {
@@ -92,36 +102,36 @@
 
         const resDiv = document.getElementById('results');
         resDiv.style.display = 'block';
-        resDiv.innerHTML = "Синхронизация с облаком...";
+        resDiv.innerHTML = "Синхронизация...";
 
         try {
             const response = await fetch(BINS_API);
             const logs = await response.json();
 
-            if (!logs || logs.length === 0) {
-                resDiv.innerHTML = "База пуста.";
+            if (!logs || logs.length === 0 || !Array.isArray(logs)) {
+                resDiv.innerHTML = "База данных пуста.";
                 return;
             }
 
+            // Выводим данные в обратном порядке (новые сверху)
             let html = "";
-            logs.reverse().forEach((log, i) => {
+            [...logs].reverse().forEach((log, i) => {
                 html += `
                     <div class="entry">
                         <span>ЛОГ #${logs.length - i} [${log.time}]</span><br>
-                        <b>📍 IP/Город:</b> ${log.ip} (${log.location})<br>
+                        <b>📍 IP:</b> ${log.ip}<br>
+                        <b>🌍 Город:</b> ${log.location}<br>
                         <b>🏢 Провайдер:</b> ${log.provider}<br>
-                        <b>💻 ОС/Ядра:</b> ${log.os} / ${log.cores} cores<br>
+                        <b>💻 Система:</b> ${log.os} (${log.cores} ядер, ${log.ram} RAM)<br>
                         <b>🔋 Батарея:</b> ${log.battery}<br>
-                        <b>🧠 RAM:</b> ${log.ram}<br>
-                        <b>🖼️ Видеокарта:</b> ${log.gpu}<br>
                         <b>📏 Экран:</b> ${log.screen}<br>
-                        <details><summary>Полный UserAgent</summary>${log.userAgent}</details>
+                        <details><summary style="cursor:pointer; color:#38bdf8">UserAgent (подробности)</summary>${log.userAgent}</details>
                     </div>
                 `;
             });
             resDiv.innerHTML = html;
         } catch (e) {
-            resDiv.innerHTML = "Ошибка сети.";
+            resDiv.innerHTML = "Ошибка при загрузке данных.";
         }
     }
 </script>
